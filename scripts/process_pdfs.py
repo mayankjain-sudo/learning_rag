@@ -123,7 +123,7 @@ class PDFProcessor:
                 pdfs_to_process = new_pdf_files + updated_pdf_files
                 
                 if not pdfs_to_process:
-                    print("✓ No new or updated PDFs to process. All PDFs are up to date!")
+                    print("No new or updated PDFs to process. All PDFs are up to date!")
                     print("\nTo reprocess all PDFs anyway, use: python main.py process --force")
                     return
                 

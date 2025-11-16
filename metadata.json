@@ -1,0 +1,10 @@
+{
+	"global": {
+		"project": "RAG Learning",
+		"department": "AI"
+	},
+	"files": {
+		"handbook.pdf": { "category": "docs", "keywords": ["guide", "intro"] },
+		"newddoc.pdf": { "classification": "internal" }
+	}
+}

@@ -9,7 +9,7 @@ import pickle
 import json
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 import time
@@ -54,6 +54,34 @@ class VectorDatabase:
         else:
             from langchain_ollama import OllamaEmbeddings
             self.embeddings = OllamaEmbeddings(model=embedding_model)
+    
+    @staticmethod
+    def _sanitize_metadata(metadata: Dict) -> Dict:
+        """
+        Sanitize metadata to ensure all values are compatible with ChromaDB.
+        ChromaDB only accepts: str, int, float, bool, or None.
+        Converts lists and other complex types to strings.
+        
+        Args:
+            metadata: Original metadata dictionary
+            
+        Returns:
+            Sanitized metadata dictionary
+        """
+        sanitized = {}
+        for key, value in metadata.items():
+            if value is None or isinstance(value, (str, int, float, bool)):
+                sanitized[key] = value
+            elif isinstance(value, list):
+                # Convert list to comma-separated string
+                sanitized[key] = ", ".join(str(v) for v in value)
+            elif isinstance(value, dict):
+                # Convert dict to JSON string
+                sanitized[key] = json.dumps(value)
+            else:
+                # Convert any other type to string
+                sanitized[key] = str(value)
+        return sanitized
             
     def create_chunks(
         self,
@@ -85,6 +113,7 @@ class VectorDatabase:
                 chunk_metadata['page'] = page_data['page']
                 chunk_metadata['total_pages'] = page_data['total_pages']
                 chunk_metadata['chunk_index'] = chunk_idx
+                chunk_metadata['last_updated_on'] = time.strftime("%Y-%m-%d %H:%M:%S")
                 all_metadatas.append(chunk_metadata)
                 
         return all_texts, all_metadatas
@@ -106,6 +135,10 @@ class VectorDatabase:
             Chroma database vector store instance
         """
         print(f"Storing {len(texts)} chunks into ChromaDB...with batch size {batch_size}")
+        
+        # Sanitize metadata: ChromaDB only accepts str, int, float, bool, or None
+        # Convert lists and other complex types to strings
+        metadatas = [self._sanitize_metadata(m) for m in metadatas]
         
         
         #Initialize ChromaDB or load existing
@@ -176,24 +209,45 @@ class VectorDatabase:
     def _save_chunk_data(self, texts: List[str], metadatas: List[Dict]) -> None:
         """
         Saves chunk texts and metadata to JSON and pickle files for inspection.
+        Appends new chunks to existing data instead of overwriting.
 
         Args:
             texts: List of text chunks.
             metadatas: List of metadata dictionaries.
         """
+        json_path = self.db_dir / "chunk_data.json"
+        pickle_path = self.db_dir / "chunk_data.pkl"
+        
+        # Load existing data if it exists
+        existing_texts = []
+        existing_metadatas = []
+        
+        if json_path.exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    existing_texts = existing_data.get('texts', [])
+                    existing_metadatas = existing_data.get('metadata', [])
+            except Exception as e:
+                print(f"Warning: Could not load existing chunk data: {e}")
+        
+        # Append new chunks to existing
+        all_texts = existing_texts + texts
+        all_metadatas = existing_metadatas + metadatas
+        
         chunk_data = {
-            'texts': texts, 
-            'metadata': metadatas
-            }
+            'texts': all_texts, 
+            'metadata': all_metadatas,
+            'last_updated': time.strftime("%Y-%m-%d %H:%M:%S"),
+            'total_chunks': len(all_texts)
+        }
         
         # Save as JSON
-        json_path = self.db_dir / "chunk_data.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(chunk_data, f, ensure_ascii=False, indent=4)
-        print(f"Saved chunk data to {json_path}")
+        print(f"Saved chunk data to {json_path} (total: {len(all_texts)} chunks)")
         
         # Save as pickle
-        pickle_path = self.db_dir / "chunk_data.pkl"
         with open(pickle_path, 'wb') as f:
             pickle.dump(chunk_data, f)
         print(f"Saved chunk data to {pickle_path}")
@@ -235,9 +289,18 @@ class VectorDatabase:
                     if isinstance(pdfs, list):
                         # Old format: convert to dict without checksums
                         return {pdf: "" for pdf in pdfs}
+                    elif isinstance(pdfs, dict):
+                        # Newer format may store dict per file with checksum and timestamp
+                        result: Dict[str, str] = {}
+                        for fname, val in pdfs.items():
+                            if isinstance(val, dict):
+                                result[fname] = val.get('checksum', "")
+                            else:
+                                # Backward-compat: value is checksum string
+                                result[fname] = str(val)
+                        return result
                     else:
-                        # New format: dict with checksums
-                        return pdfs
+                        return {}
             except Exception as e:
                 print(f"Warning: Could not load processed PDFs tracking: {e}")
                 return {}
@@ -252,22 +315,50 @@ class VectorDatabase:
         """
         tracking_file = self.db_dir / 'processed_pdfs.json'
         
-        # Load existing data
-        existing_pdfs = self.get_processed_pdfs()
-        
-        # Add/update new PDFs
-        existing_pdfs.update(pdf_info)
-        
-        # Save updated list
-        data = {
-            'processed_pdfs': existing_pdfs,
-            'last_updated_on': time.strftime("%Y-%m-%d %H:%M:%S")
+        # Load existing full structure if present
+        existing_full: Dict[str, Any] = {}
+        if tracking_file.exists():
+            try:
+                with open(tracking_file, 'r') as f:
+                    data = json.load(f)
+                    if isinstance(data.get('processed_pdfs'), dict):
+                        existing_full = data.get('processed_pdfs', {})
+                    elif isinstance(data.get('processed_pdfs'), list):
+                        # Old list format -> convert to dict entries with empty checksum
+                        existing_full = {name: {"checksum": "", "last_updated_on": ""} for name in data.get('processed_pdfs', [])}
+            except Exception as e:
+                print(f"Warning: Could not load existing processed PDFs for update: {e}")
+                existing_full = {}
+
+        # Normalize existing entries to dict form
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for fname, val in existing_full.items():
+            if isinstance(val, dict):
+                normalized[fname] = {
+                    "checksum": val.get("checksum", ""),
+                    "last_updated_on": val.get("last_updated_on", "")
+                }
+            else:
+                normalized[fname] = {"checksum": str(val), "last_updated_on": ""}
+
+        # Merge incoming info with per-file timestamp
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        for fname, checksum in pdf_info.items():
+            normalized[fname] = {
+                "checksum": checksum,
+                "last_updated_on": ts
+            }
+
+        # Save updated structure; keep a file-level timestamp for convenience
+        out = {
+            'processed_pdfs': normalized,
+            'last_updated_on': ts
         }
-        
+
         with open(tracking_file, 'w') as f:
-            json.dump(data, f, indent=2)
-        
-        print(f"Updated processed PDFs tracking: {len(existing_pdfs)} total")
+            json.dump(out, f, indent=2)
+
+        print(f"Updated processed PDFs tracking: {len(normalized)} total")
         
     def load_database(self) -> Chroma:
         """
