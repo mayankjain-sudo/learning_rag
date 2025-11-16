@@ -2,9 +2,44 @@
 
 A small RAG learning project that processes PDFs, chunks text, and stores embeddings in ChromaDB. Supports Ollama and Azure embeddings and allows attaching custom metadata per document.
 
+## Overview
+
+This project processes PDF files, extracts text, creates chunks with metadata, and stores them in an embedded vector database using ChromaDB.
+
+## Features
+
+- **PDF Text Extraction**: Reads PDF files and extracts text from all pages
+- **Intelligent Chunking**: Splits text into manageable chunks with overlap for better context
+- **Metadata Tracking**: Stores source file, page number, and chunk information
+- **Vector Database**: Uses ChromaDB with sentence transformers for semantic search
+- **Persistent Storage**: Database stored in `db` directory for reuse
+
+## Installation
+
+1. Clone the repository
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Usage
 
-Place PDFs in the `data/` directory. Then run:
+1. Create a `data` directory in the project root
+2. Add your PDF files to the `data` directory
+3. Run the processor:
+
+```bash
+python pdf_processor.py
+```
+
+The script will:
+- Process all PDF files in the `data` directory
+- Extract text from each page
+- Create chunks with metadata (source file, page number, chunk index)
+- Store chunks in the vector database in the `db` directory
+
+## To add custom metadata
 
 ```bash
 python3 scripts/process_pdfs.py metadata.json
