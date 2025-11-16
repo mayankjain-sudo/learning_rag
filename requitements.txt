@@ -1,0 +1,13 @@
+pypdf
+langchain-text-splitters
+langchain-community
+langchain-core
+chromadb
+sentence-transformers
+langchain_ollama
+fastapi
+uvicorn
+pydantic
+streamlit
+toml
+langchain-openai

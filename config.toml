@@ -1,0 +1,48 @@
+# Project Configuration
+
+[project]
+name = "learning-rag-system"
+version = "1.0.0"
+description = "PDF Processing and RAG System"
+
+[paths]
+data_dir = "data"
+db_dir = "chroma_db"
+
+[provider]
+# Provider options: "ollama" or "azure"
+type = "ollama"
+
+# Ollama Configuration
+[ollama]
+base_url = "http://localhost:11434"
+embedding_model = "nomic-embed-text"
+default_llm = "deepseek-r1:7b"  # Options: llama3.2, mistral, llama3.1, deepseek-r1:7b
+
+# Azure OpenAI Configuration
+[azure]
+api_key = ""  # Set via environment variable AZURE_OPENAI_API_KEY
+api_version = "2024-02-15-preview"
+azure_endpoint = ""  # e.g., "https://your-resource.openai.azure.com/"
+embedding_deployment = ""  # Your embedding deployment name
+llm_deployment = ""  # Your chat completion deployment name
+embedding_model = "text-embedding-ada-002"  # Model behind deployment
+llm_model = "gpt-4"  # Model behind deployment
+
+[chunking]
+chunk_size = 500
+chunk_overlap = 200
+
+[retrieval]
+default_top_k = 3  # Fine-tuned: faster retrieval with good accuracy
+
+[llm]
+temperature = 0.3  # Fine-tuned: more focused, deterministic responses
+max_tokens = 1000
+
+[memory]
+memory_window = 2  # Fine-tuned: lightweight conversation memory
+
+[cache]
+enable_cache = true
+cache_ttl = 3600  # 1 hour cache TTL
