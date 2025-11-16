@@ -8,6 +8,8 @@ description = "PDF Processing and RAG System"
 [paths]
 data_dir = "data"
 db_dir = "chroma_db"
+sessions_dir = "sessions"
+
 
 [provider]
 # Provider options: "ollama" or "azure"
