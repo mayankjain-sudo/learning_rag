@@ -88,5 +88,10 @@ You can provide metadata in any of the following formats, and it will be merged 
 
 Notes:
 - Final metadata merge order: PDF metadata → global metadata → per-file metadata (per-file overrides global).
-- Recognized fields (others are allowed and passed through): `category`, `keywords`, `department`, `classification`, `language`, `version`, `project`, `year`, `type`, `status`, `tags`, `priority`, `confidential`.
+- Recognized fields (others are allowed and passed through): `category`, `keywords`, `department`, `classification`, `language`, `version`, `project`, `year`, `type`, `status`, `tags`, `priority`, `confidential`. 
 
+## Run the application 
+
+```bash
+streamlit run app/web_ui.py
+```
