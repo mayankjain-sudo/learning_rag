@@ -1,0 +1,18 @@
+{
+  "session_id": "6b8393e8-bf11-4e4a-80f4-870532bb958b",
+  "name": "Session 2025-11-16 14:46",
+  "created_at": "2025-11-16T14:46:39.289375",
+  "updated_at": "2025-11-16T14:47:02.019300",
+  "messages": [
+    {
+      "role": "user",
+      "content": "system",
+      "timestamp": "2025-11-16T14:46:39.289726"
+    },
+    {
+      "role": "assistant",
+      "content": "The Attendance & Punctuality Policy at ABC Limited requires employees to adhere to prescribed working hours, notify supervisors promptly of absences or delays, and record attendance using a designated system. Repeated tardiness or absenteeism may result in disciplinary action.\n\n**Answer:**  \nRegular attendance is essential for operational efficiency. Employees must:  \n1. Adhere to prescribed working hours.  \n2. Notify supervisors promptly on absences or delays.  \n3. Record attendance via the designated system.  \n\nRepetitive tardiness or absenteeism may lead to disciplinary action, as outlined in Document 1 of the Employee Policy Handbook.",
+      "timestamp": "2025-11-16T14:47:02.019186"
+    }
+  ]
+}
