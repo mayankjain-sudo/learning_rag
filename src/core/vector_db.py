@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any
 from langchain_experimental.text_splitter import SemanticChunker
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 import time
 
@@ -23,7 +24,10 @@ class VectorDatabase:
         self,
         db_dir: str = "chroma_db",
         embedding_model: str = "nomic-embed-3-small",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
         embeddings = None,
+        chunking_strategy: str = "semantic", # recursive or semantic
     ):
         """
         Initializes the VectorDatabase with a configuration and embedding function.
@@ -39,6 +43,7 @@ class VectorDatabase:
         """
         self.db_dir = Path(db_dir)
         self.db_dir.mkdir(exist_ok=True)
+        self.chunking_strategy = chunking_strategy
         
         #Use provided embedding or default to Ollama
         if embeddings is not None:
@@ -50,12 +55,21 @@ class VectorDatabase:
         # Initialize Semantic Text Splitter
         # Semantic chunking creates chunks based on meaning/semantic similarity
         # Splits occur at natural semantic boundaries rather than fixed character counts
-        self.text_splitter = SemanticChunker(
-            embeddings=self.embeddings,
-            breakpoint_threshold_type="percentile",  # Uses percentile-based breakpoints
-            breakpoint_threshold_amount=95  # Only break at top 5% semantic differences
-        )
-        print("Using semantic chunking (meaning-based splits)")
+
+        if self.chunking_strategy == "semantic":
+            self.text_splitter = SemanticChunker(
+                self.embeddings,
+                breakpoint_threshold_type="percentile",
+                breakpoint_threshold_amount=95
+            )
+            print("Using semantic chunking (meaning-based splits)")
+        else:
+            self.text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                length_function=len
+            )
+        
     
     @staticmethod
     def _sanitize_metadata(metadata: Dict) -> Dict:

@@ -61,6 +61,8 @@ class PDFProcessor:
             
         self.vector_db = VectorDatabase(
             db_dir=str(self.db_dir),
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
             embeddings=embeddings
         )
         
