@@ -33,6 +33,9 @@ class RAGEngine:
         cache_ttl: int = 3600,
         sessions_dir: str = "sessions",
         memory_window: int = 2,
+        enable_reranking: bool = True,
+        rerank_top_n: int = 10,
+        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
         ):
         """
         Initialize RAG engine.
@@ -48,6 +51,9 @@ class RAGEngine:
             cache_ttl: Cache time-to-live in seconds
             sessions_dir: Directory for storing chat sessions
             memory_window: Number of previous messages to include - Fine-tuned default: 2
+            enable_reranking: Enable two-stage retrieval with reranking
+            rerank_top_n: Number of candidates to retrieve before reranking (should be > top_k)
+            reranker_model: Cross-encoder model for reranking
         """
         
         self.db_dir = Path(db_dir)
@@ -55,6 +61,12 @@ class RAGEngine:
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl
         self.memory_window = memory_window
+        
+        # Reranking configuration
+        self.enable_reranking = enable_reranking
+        self.rerank_top_n = max(rerank_top_n, top_k + 2)  # Ensure we retrieve more than we need
+        self.reranker_model = reranker_model
+        self.reranker = None
         
         # Session management
         self.sessions_dir = Path(sessions_dir)
@@ -87,6 +99,10 @@ class RAGEngine:
         # Load vector database
         self.vectordb = self._load_database()
         
+        # Initialize reranker if enabled
+        if self.enable_reranking:
+            self._initialize_reranker()
+        
         # Create prompt template
         self.prompt_template = self._create_prompt_template()
         
@@ -109,6 +125,29 @@ class RAGEngine:
         )
         
         return vectordb
+    
+    def _initialize_reranker(self):
+        """
+        Initialize the cross-encoder model for reranking.
+        Uses a lightweight cross-encoder model for better relevance scoring.
+        """
+        try:
+            from sentence_transformers import CrossEncoder
+            
+            print(f"Loading reranker: {self.reranker_model}...")
+            self.reranker = CrossEncoder(self.reranker_model)
+            print("✓ Reranking enabled (cross-encoder model loaded)")
+            
+        except ImportError:
+            print("⚠ sentence-transformers not installed. Reranking disabled.")
+            print("  Install with: pip install sentence-transformers")
+            self.enable_reranking = False
+            self.reranker = None
+            
+        except Exception as e:
+            print(f"⚠ Could not load reranker: {e}. Reranking disabled.")
+            self.enable_reranking = False
+            self.reranker = None
         
     def get_database_stats(self) -> Dict[str, Any]:
         """
@@ -212,16 +251,74 @@ Answer:"""
     
     def retrieve_context(self, question: str) -> List[Document]:
         """
-        Retrieve relevant document chunks for a question.
+        Retrieve relevant document chunks with optional reranking.
+        
+        Two-stage retrieval:
+        1. Fast vector search to get candidates (if reranking enabled)
+        2. Precise cross-encoder reranking to get best results
         
         Args:
             question: User's question
             
         Returns:
-            List of relevant document chunks
+            List of relevant document chunks (reranked if enabled)
         """
-        results = self.vectordb.similarity_search(question, k=self.top_k)
-        return results
+        if self.enable_reranking and self.reranker is not None:
+            # Stage 1: Retrieve more candidates using vector similarity
+            initial_results = self.vectordb.similarity_search(
+                question, 
+                k=self.rerank_top_n
+            )
+            
+            if not initial_results:
+                return []
+            
+            # Stage 2: Rerank using cross-encoder
+            reranked_results = self._rerank_documents(question, initial_results)
+            
+            # Return top-K after reranking
+            return reranked_results[:self.top_k]
+        else:
+            # Standard retrieval without reranking
+            results = self.vectordb.similarity_search(question, k=self.top_k)
+            return results
+    
+    def _rerank_documents(
+        self, 
+        query: str, 
+        documents: List[Document]
+    ) -> List[Document]:
+        """
+        Rerank documents using cross-encoder model for better relevance.
+        
+        The cross-encoder processes query and document together, providing
+        more accurate relevance scores than vector similarity alone.
+        
+        Args:
+            query: User's question
+            documents: Initial retrieved documents
+            
+        Returns:
+            Documents sorted by relevance score (descending)
+        """
+        if not documents or self.reranker is None:
+            return documents
+        
+        # Prepare query-document pairs for reranking
+        pairs = [[query, doc.page_content] for doc in documents]
+        
+        # Get relevance scores from cross-encoder
+        # Higher score = more relevant
+        scores = self.reranker.predict(pairs)
+        
+        # Combine documents with their scores
+        scored_documents = list(zip(documents, scores))
+        
+        # Sort by relevance score (descending)
+        scored_documents.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return reranked documents (without scores)
+        return [doc for doc, score in scored_documents]
     
     def format_context(self, documents: List[Document]) -> str:
         """
