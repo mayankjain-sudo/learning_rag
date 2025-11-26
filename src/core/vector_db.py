@@ -8,12 +8,159 @@ Supports both Ollama and Azure OpenAI embeddings.
 import pickle
 import json
 import hashlib
+import re
+import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any
-from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 import time
+
+class CustomSemanticChunker:
+    """
+    Custom semantic chunker that splits text based on semantic similarity.
+    Uses embeddings to detect natural breakpoints in content.
+    """
+    
+    def __init__(self, embeddings, breakpoint_threshold_type: str = "percentile", 
+                 breakpoint_threshold_amount: float = 95, min_chunk_size: int = 100):
+        """
+        Initialize the semantic chunker.
+        
+        Args:
+            embeddings: Embedding function to use
+            breakpoint_threshold_type: Type of threshold ("percentile" or "standard_deviation")
+            breakpoint_threshold_amount: Threshold value (percentile or std dev multiplier)
+            min_chunk_size: Minimum characters per chunk
+        """
+        self.embeddings = embeddings
+        self.breakpoint_threshold_type = breakpoint_threshold_type
+        self.breakpoint_threshold_amount = breakpoint_threshold_amount
+        self.min_chunk_size = min_chunk_size
+    
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """
+        Split text into sentences using regex.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            List of sentences
+        """
+        # Split on sentence boundaries (., !, ?) followed by whitespace
+        sentence_pattern = r'(?<=[.!?])\s+'
+        sentences = re.split(sentence_pattern, text)
+        # Filter out empty strings and very short sentences
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+        return sentences
+    
+    def _calculate_cosine_distances(self, embeddings_list: List[List[float]]) -> List[float]:
+        """
+        Calculate cosine distances between consecutive embeddings.
+        
+        Args:
+            embeddings_list: List of embedding vectors
+            
+        Returns:
+            List of distances between consecutive embeddings
+        """
+        distances = []
+        for i in range(len(embeddings_list) - 1):
+            # Convert to numpy arrays
+            emb1 = np.array(embeddings_list[i])
+            emb2 = np.array(embeddings_list[i + 1])
+            
+            # Calculate cosine similarity
+            similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
+            
+            # Convert to distance (1 - similarity)
+            distance = 1 - similarity
+            distances.append(distance)
+        
+        return distances
+    
+    def _calculate_threshold(self, distances: List[float]) -> float:
+        """
+        Calculate the threshold for determining breakpoints.
+        
+        Args:
+            distances: List of cosine distances
+            
+        Returns:
+            Threshold value
+        """
+        if self.breakpoint_threshold_type == "percentile":
+            return float(np.percentile(distances, self.breakpoint_threshold_amount))
+        elif self.breakpoint_threshold_type == "standard_deviation":
+            mean = np.mean(distances)
+            std = np.std(distances)
+            return float(mean + (self.breakpoint_threshold_amount * std))
+        else:
+            # Default to 95th percentile
+            return float(np.percentile(distances, 95))
+    
+    def split_text(self, text: str) -> List[str]:
+        """
+        Split text into semantic chunks.
+        
+        Args:
+            text: Input text to split
+            
+        Returns:
+            List of text chunks
+        """
+        # Handle empty or very short text
+        if not text or len(text) < self.min_chunk_size:
+            return [text] if text else []
+        
+        # Split into sentences
+        sentences = self._split_into_sentences(text)
+        
+        if len(sentences) <= 1:
+            return [text]
+        
+        # Get embeddings for each sentence
+        try:
+            sentence_embeddings = self.embeddings.embed_documents(sentences)
+        except Exception as e:
+            print(f"Warning: Could not generate embeddings for semantic chunking: {e}")
+            # Fallback to returning the whole text
+            return [text]
+        
+        # Calculate distances between consecutive sentences
+        distances = self._calculate_cosine_distances(sentence_embeddings)
+        
+        if not distances:
+            return [text]
+        
+        # Calculate threshold for breakpoints
+        threshold = self._calculate_threshold(distances)
+        
+        # Identify breakpoints where distance exceeds threshold
+        breakpoints = [i + 1 for i, dist in enumerate(distances) if dist > threshold]
+        
+        # Add start and end points
+        breakpoints = [0] + breakpoints + [len(sentences)]
+        
+        # Create chunks from sentences between breakpoints
+        chunks = []
+        for i in range(len(breakpoints) - 1):
+            start_idx = breakpoints[i]
+            end_idx = breakpoints[i + 1]
+            chunk_sentences = sentences[start_idx:end_idx]
+            chunk_text = ' '.join(chunk_sentences)
+            
+            # Ensure minimum chunk size
+            if len(chunk_text) >= self.min_chunk_size:
+                chunks.append(chunk_text)
+            elif chunks:  # Append to previous chunk if too small
+                chunks[-1] += ' ' + chunk_text
+            else:  # First chunk, keep even if small
+                chunks.append(chunk_text)
+        
+        return chunks if chunks else [text]
+
 
 class VectorDatabase:
     """
@@ -52,23 +199,25 @@ class VectorDatabase:
             from langchain_ollama import OllamaEmbeddings
             self.embeddings = OllamaEmbeddings(model=embedding_model)
         
-        # Initialize Semantic Text Splitter
+        # Initialize Text Splitter
         # Semantic chunking creates chunks based on meaning/semantic similarity
         # Splits occur at natural semantic boundaries rather than fixed character counts
 
         if self.chunking_strategy == "semantic":
-            self.text_splitter = SemanticChunker(
+            self.text_splitter = CustomSemanticChunker(
                 self.embeddings,
                 breakpoint_threshold_type="percentile",
-                breakpoint_threshold_amount=95
+                breakpoint_threshold_amount=95,
+                min_chunk_size=200
             )
-            print("Using semantic chunking (meaning-based splits)")
+            print("Using custom semantic chunking (meaning-based splits)")
         else:
             self.text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 length_function=len
             )
+            print("Using recursive character text splitting")
         
     
     @staticmethod
