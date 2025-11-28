@@ -275,6 +275,28 @@ class VectorDatabase:
                 
                 # merge page metadata with pdf metadata
                 chunk_metadata = pdf_metadata.copy()
+                # Ensure reliable source identifiers for downstream UI/rendering
+                # Prefer explicit fields; fallback gracefully if missing
+                source_filename = (
+                    pdf_metadata.get('filename')
+                    or pdf_metadata.get('source')
+                    or pdf_metadata.get('file_path')
+                    or pdf_metadata.get('name')
+                    or ""
+                )
+                document_id = (
+                    pdf_metadata.get('document_id')
+                    or pdf_metadata.get('checksum')
+                    or pdf_metadata.get('sha256')
+                    or ""
+                )
+                title = pdf_metadata.get('title') or pdf_metadata.get('pdf_title') or ""
+                if source_filename:
+                    chunk_metadata['source_filename'] = source_filename
+                if document_id:
+                    chunk_metadata['document_id'] = document_id
+                if title:
+                    chunk_metadata['title'] = title
                 chunk_metadata['page'] = page_data['page']
                 chunk_metadata['total_pages'] = page_data['total_pages']
                 chunk_metadata['chunk_index'] = chunk_idx

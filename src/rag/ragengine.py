@@ -78,6 +78,8 @@ class RAGEngine:
         self._query_cache: Dict[str, Tuple[Dict, float]] = {}
         self._cache_hits = 0
         self._cache_misses = 0
+        # Token usage tracking for last request
+        self._last_token_stats: Dict[str, int] = {}
         
         if use_config:
             # Use configuration system
@@ -240,7 +242,7 @@ Instructions:
 - Answer the current question based on the provided document context and conversation history
 - Use conversation history to understand follow-up questions and maintain context
 - If the question refers to something mentioned earlier ("it", "that", "the document"), use the conversation history
-- Cite which document or page the information comes from when possible
+- Cite using the actual document filename or title and page number (e.g., "handbook.pdf, page 5"); do NOT use generic labels like "Document 1/2/3"
 - Be concise but thorough
 - If you're unsure, say "I don't have enough information to answer that accurately"
 
@@ -334,10 +336,20 @@ Answer:"""
         
         for i, doc in enumerate(documents, start=1):
             metadata = doc.metadata
-            source = metadata.get('filename', metadata.get('source', 'Unknown'))
+            filename = metadata.get('filename') or metadata.get('source') or 'Unknown'
+            # If a full path was stored in 'source', reduce to basename
+            try:
+                filename = str(Path(filename).name) if filename else 'Unknown'
+            except Exception:
+                pass
+            title = metadata.get('title')
+            # Normalize placeholder titles
+            if title in ['(anonymous)', '(unspecified)', '(untitled)', None, '']:
+                title = None
             page = metadata.get('page', 'Unknown')
-            
-            context_part = f"[Document {i}] From: {source}, Page: {page}\n{doc.page_content}\n"
+
+            label = f"{title} ({filename})" if title else filename
+            context_part = f"[{label} | page {page}]\n{doc.page_content}\n"
             context_parts.append(context_part)
         
         return "\n".join(context_parts)
@@ -365,6 +377,31 @@ Answer:"""
         
         # Generate response
         response = self.llm.invoke(prompt)
+
+        # Estimate token usage (approximation: ~4 chars per token)
+        def _estimate_tokens(text: str) -> int:
+            try:
+                # Rough heuristic suitable across models when tokenizer not available
+                return max(1, int(len(text) / 4))
+            except Exception:
+                return 0
+
+        input_tokens = _estimate_tokens(prompt)
+        # Handle both string and structured responses
+        output_text = response.content if isinstance(response.content, str) else str(response.content)
+        output_tokens = _estimate_tokens(output_text)
+        total_tokens = input_tokens + output_tokens
+
+        # Store and print token stats for visibility
+        self._last_token_stats = {
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'total_tokens': total_tokens
+        }
+        try:
+            print(f"[Tokens] input={input_tokens}, output={output_tokens}, total={total_tokens}")
+        except Exception:
+            pass
         
         # Handle both string and structured responses
         if isinstance(response.content, str):
@@ -802,6 +839,10 @@ Answer:"""
             'retrieved_chunks': len(documents),
             'query_analysis': analysis
         }
+
+        # Attach token stats if available
+        if getattr(self, '_last_token_stats', None):
+            response['token_usage'] = self._last_token_stats
         
         # Add sources if requested
         if verbose:
