@@ -69,6 +69,7 @@ class VectorDatabase:
                 chunk_overlap=chunk_overlap,
                 length_function=len
             )
+            print("Using recursive chunking.")
         
     
     @staticmethod
@@ -130,6 +131,7 @@ class VectorDatabase:
                 chunk_metadata['total_pages'] = page_data['total_pages']
                 chunk_metadata['chunk_index'] = chunk_idx
                 chunk_metadata['last_updated_on'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                ##chunk_metadata['chunk'] = chunk
                 all_metadatas.append(chunk_metadata)
                 
         return all_texts, all_metadatas
@@ -170,8 +172,11 @@ class VectorDatabase:
             
             # Process in batches
         total_batches = (len(texts) - 1) // batch_size + 1
+        all_ids = []
+        
         for i in range(0, len(texts), batch_size):
             batch_texts = texts[i:i+batch_size]
+            ##print(f"Batch texts: {batch_texts}")
             batch_metadatas = metadatas[i:i+batch_size]
             
             batch_num = i // batch_size + 1
@@ -179,6 +184,7 @@ class VectorDatabase:
             
             # Retry logic for transient errors
             max_retries = 3
+            batch_ids = []
             for attempt in range(max_retries):
                 try:
                     if vectordb is None:
@@ -189,12 +195,43 @@ class VectorDatabase:
                             embedding=self.embeddings,
                             persist_directory=str(self.db_dir)
                         )
-                    else:
-                        # Add to existing database
+                        # Chroma.from_texts doesn't return IDs directly in all versions, 
+                        # but we can query them or generate them if we passed them.
+                        # However, add_texts returns IDs. 
+                        # For consistency, let's assume we might need to fetch them or 
+                        # better yet, let's use add_texts for everything if possible, 
+                        # but from_texts is static.
+                        # Actually, from_texts returns the vectorstore.
+                        # We can get IDs if we provide them, or we can query back.
+                        # Let's try to get IDs by querying or just rely on add_texts for subsequent batches.
+                        # For the first batch, we might miss IDs if we don't provide them.
+                        # Strategy: Generate IDs deterministically or let Chroma generate and we might miss them here 
+                        # unless we query immediately. 
+                        # Simpler: Generate UUIDs ourselves.
+                        import uuid
+                        batch_ids = [str(uuid.uuid4()) for _ in batch_texts]
+                        # We need to re-do this to pass IDs
+                        vectordb = Chroma(
+                            persist_directory=str(self.db_dir),
+                            embedding_function=self.embeddings
+                        )
                         vectordb.add_texts(
                             texts=batch_texts,
-                            metadatas=batch_metadatas
+                            metadatas=batch_metadatas,
+                            ids=batch_ids
                         )
+                    else:
+                        # Add to existing database
+                        # Generate IDs to ensure we have them
+                        import uuid
+                        batch_ids = [str(uuid.uuid4()) for _ in batch_texts]
+                        vectordb.add_texts(
+                            texts=batch_texts,
+                            metadatas=batch_metadatas,
+                            ids=batch_ids
+                        )
+                    
+                    all_ids.extend(batch_ids)
                     print("✓")
                     break  # Success, exit retry loop
                 except Exception as e:
@@ -213,7 +250,7 @@ class VectorDatabase:
         print(f"Total chunks: {len(texts)}")
         
         # Save chunk data for inspection
-        self._save_chunk_data(texts, metadatas)
+        self._save_chunk_data(texts, metadatas, all_ids)
         
         if vectordb is None:
             raise RuntimeError("Failed to create vector database")
@@ -222,51 +259,40 @@ class VectorDatabase:
     
     
     # save the chunk data
-    def _save_chunk_data(self, texts: List[str], metadatas: List[Dict]) -> None:
+    def _save_chunk_data(self, texts: List[str], metadatas: List[Dict], ids: List[str] = None) -> None:
         """
-        Saves chunk texts and metadata to JSON and pickle files for inspection.
-        Appends new chunks to existing data instead of overwriting.
+        Saves chunk texts and metadata to a JSONL file for inspection/reference.
+        Appends new chunks to existing file. This is for reference ONLY and not used for operations.
 
         Args:
             texts: List of text chunks.
             metadatas: List of metadata dictionaries.
+            ids: List of chunk IDs.
         """
-        json_path = self.db_dir / "chunk_data.json"
-        pickle_path = self.db_dir / "chunk_data.pkl"
+        jsonl_path = self.db_dir / "chunk_data.jsonl"
         
-        # Load existing data if it exists
-        existing_texts = []
-        existing_metadatas = []
-        
-        if json_path.exists():
-            try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    existing_data = json.load(f)
-                    existing_texts = existing_data.get('texts', [])
-                    existing_metadatas = existing_data.get('metadata', [])
-            except Exception as e:
-                print(f"Warning: Could not load existing chunk data: {e}")
-        
-        # Append new chunks to existing
-        all_texts = existing_texts + texts
-        all_metadatas = existing_metadatas + metadatas
-        
-        chunk_data = {
-            'texts': all_texts, 
-            'metadata': all_metadatas,
-            'last_updated': time.strftime("%Y-%m-%d %H:%M:%S"),
-            'total_chunks': len(all_texts)
-        }
-        
-        # Save as JSON
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(chunk_data, f, ensure_ascii=False, indent=4)
-        print(f"Saved chunk data to {json_path} (total: {len(all_texts)} chunks)")
-        
-        # Save as pickle
-        with open(pickle_path, 'wb') as f:
-            pickle.dump(chunk_data, f)
-        print(f"Saved chunk data to {pickle_path}")
+        # Prepare new chunks data
+        new_chunks_data = []
+        if texts and metadatas:
+            for i in range(len(texts)):
+                chunk_entry = {
+                    'text': texts[i],
+                    'metadata': metadatas[i],
+                    'vector': self.embeddings.embed_query(texts[i]),
+                    'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                if ids and i < len(ids):
+                    chunk_entry['id'] = ids[i]
+                new_chunks_data.append(chunk_entry)
+
+        # Append to JSONL file
+        try:
+            with open(jsonl_path, 'a', encoding='utf-8') as f:
+                for chunk in new_chunks_data:
+                    f.write(json.dumps(chunk, ensure_ascii=False) + '\n')
+            print(f"Appended {len(new_chunks_data)} chunks to {jsonl_path}")
+        except Exception as e:
+            print(f"Warning: Could not save chunk data to JSONL: {e}")
         
     # Calculate the checksum fof each pdf file
     def calculate_pdf_checksum(self, pdf_path: Path) -> str:

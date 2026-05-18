@@ -11,3 +11,4 @@ pydantic
 streamlit
 toml
 langchain-openai
+tqdm
